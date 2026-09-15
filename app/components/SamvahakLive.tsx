@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import MapGL, { Source, Layer as MapLayer, Marker, type MapRef, type LayerProps } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
@@ -23,13 +23,12 @@ import {
 type LngLat = [number, number];
 
 // ---------------------------------------------------------------------------
-// Default mock data
+// Default mock data & constants
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MAPBOX_TOKEN =
   'pk.eyJ1Ijoia2FtZW93d3ciLCJhIjoiY211MHNtZmNmMDVvNjJ5c2FkYTVoMzQ5byJ9.OskXRtPn-dRTqyN6k-yVyQ';
 
-// Where the camera settles once the cinematic intro finishes.
 const REGIONAL_VIEW_STATE = {
   longitude: 94.05,
   latitude: 25.0,
@@ -38,8 +37,6 @@ const REGIONAL_VIEW_STATE = {
   bearing: -20,
 };
 
-// The camera opens from orbit and glides down into the region — see
-// `handleMapLoad`, which kicks off the flyTo once the style has painted.
 const ORBITAL_VIEW_STATE = {
   longitude: 92.8,
   latitude: 25.6,
@@ -48,34 +45,29 @@ const ORBITAL_VIEW_STATE = {
   bearing: 0,
 };
 
-// Imphal -> Ukhrul hill corridor. Vertex index 4 (94.051, 25.005) is the
-// hazard point: where the landslide sits and where the alternate route branches.
 const DEFAULT_PRIMARY_ROUTE: LngLat[] = [
   [93.9368, 24.817], // Imphal
   [93.972, 24.861],
   [94.005, 24.902],
   [94.029, 24.952],
-  [94.051, 25.005], // <- hazard point / branch point
+  [94.051, 25.005], // Hazard point
   [94.079, 25.048],
   [94.11, 25.081],
   [94.3667, 25.1167], // Ukhrul
 ];
 
 const DEFAULT_ALTERNATIVE_ROUTE: LngLat[] = [
-  [94.051, 25.005], // shares the branch point, no gap when drawn
+  [94.051, 25.005],
   [94.085, 24.985],
   [94.145, 24.995],
   [94.205, 25.03],
   [94.265, 25.07],
   [94.32, 25.095],
-  [94.3667, 25.1167], // Ukhrul
+  [94.3667, 25.1167],
 ];
 
-// Vertex 4 of 7 segments in => hazard sits 4/7 of the way along the primary route
 const DEFAULT_HAZARD_FRACTION = 4 / 7;
 
-// Demo weather regions. In production these coordinates + conditions come from
-// IMD / OpenWeather / an internal weather service — see `WeatherRegion` below.
 type WeatherCondition = 'clear' | 'partly-cloudy' | 'rain' | 'heavy-rain' | 'storm' | 'fog';
 
 interface WeatherRegion {
@@ -84,7 +76,6 @@ interface WeatherRegion {
   lng: number;
   lat: number;
   condition: WeatherCondition;
-  /** 0..1, drives cloud density / opacity / drift range */
   intensity: number;
 }
 
@@ -138,7 +129,6 @@ function cumulativeLengths(coords: LngLat[]) {
   return { cum, total };
 }
 
-/** Point at `fraction` (0..1) along a coordinate path, by arc length. */
 function pointAtFraction(coords: LngLat[], fraction: number): LngLat {
   const { cum, total } = cumulativeLengths(coords);
   const target = Math.max(0, Math.min(1, fraction)) * total;
@@ -155,7 +145,6 @@ function pointAtFraction(coords: LngLat[], fraction: number): LngLat {
   return coords[coords.length - 1];
 }
 
-/** Sub-path of `coords` from fraction 0 up to `fraction`, for partial line rendering. */
 function sliceUpToFraction(coords: LngLat[], fraction: number): LngLat[] {
   const { cum, total } = cumulativeLengths(coords);
   const target = Math.max(0, Math.min(1, fraction)) * total;
@@ -179,8 +168,6 @@ function toLineFeature(coords: LngLat[]) {
   };
 }
 
-/** Small deterministic hash so per-region cloud drift is stable across renders
- *  without every region animating in lockstep. */
 function seedFrom(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
@@ -188,15 +175,15 @@ function seedFrom(id: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Animation state machine
+// Animation constants
 // ---------------------------------------------------------------------------
 
 type Phase = 'normal' | 'hazard' | 'rerouting' | 'resolved' | 'arrived';
 
-const SPEED = 0.09; // fraction of a route traversed per second
-const HAZARD_PAUSE_MS = 2000; // how long the pulsing alert holds before AI acts
-const REROUTE_REVEAL_MS = 1300; // how long the "rerouting" text/cyan reveal holds
-const ARRIVAL_PAUSE_MS = 1600; // pause at destination before the loop restarts
+const SPEED = 0.09;
+const HAZARD_PAUSE_MS = 2000;
+const REROUTE_REVEAL_MS = 1300;
+const ARRIVAL_PAUSE_MS = 1600;
 
 const PHASE_TEXT: Record<Phase, { label: string; className: string }> = {
   normal: { label: 'Status: Normal | Essential Goods En Route', className: 'text-slate-200' },
@@ -206,8 +193,6 @@ const PHASE_TEXT: Record<Phase, { label: string; className: string }> = {
   arrived: { label: 'Delivered Safely | Cycle Restarting', className: 'text-emerald-300' },
 };
 
-// Route Risk Index shown in the AI explanation panel, per phase — this is
-// the same number the "Route risk: 24 -> 71" callout is built from.
 const RISK_BY_PHASE: Record<Phase, number> = {
   normal: 24,
   hazard: 71,
@@ -217,10 +202,10 @@ const RISK_BY_PHASE: Record<Phase, number> = {
 };
 
 // ---------------------------------------------------------------------------
-// Small presentational pieces
+// Sub-components
 // ---------------------------------------------------------------------------
 
-function GlassPanel({
+const GlassPanel = memo(function GlassPanel({
   className = '',
   children,
 }: {
@@ -234,9 +219,9 @@ function GlassPanel({
       {children}
     </div>
   );
-}
+});
 
-function WeatherCloud({ region }: { region: WeatherRegion }) {
+const WeatherCloud = memo(function WeatherCloud({ region }: { region: WeatherRegion }) {
   if (region.condition === 'clear') {
     return (
       <div
@@ -247,9 +232,9 @@ function WeatherCloud({ region }: { region: WeatherRegion }) {
   }
 
   const seed = seedFrom(region.id);
-  const durA = 14 + (seed % 7); // 14–20s
-  const durB = 18 + ((seed >> 3) % 9); // 18–26s
-  const delay = (seed % 5) * -1.3; // negative delay so clouds start mid-cycle, not synced
+  const durA = 14 + (seed % 7);
+  const durB = 18 + ((seed >> 3) % 9);
+  const delay = (seed % 5) * -1.3;
   const blobCount = region.condition === 'storm' || region.condition === 'heavy-rain' ? 3 : 2;
   const baseSize = 34 + region.intensity * 46;
   const tint =
@@ -285,7 +270,7 @@ function WeatherCloud({ region }: { region: WeatherRegion }) {
           }}
         />
       ))}
-      {(region.condition === 'storm') && (
+      {region.condition === 'storm' && (
         <div
           className="samvahak-twinkle"
           style={{
@@ -302,10 +287,10 @@ function WeatherCloud({ region }: { region: WeatherRegion }) {
       )}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
-// Component
+// Main Component
 // ---------------------------------------------------------------------------
 
 interface SamvahakLiveProps {
@@ -368,7 +353,7 @@ export default function SamvahakLive({
     timeoutsRef.current.push(id);
   }, []);
 
-  // --- Main animation loop --------------------------------------------------
+  // Animation Loop
   useEffect(() => {
     const tick = (now: number) => {
       if (lastTimeRef.current === null) lastTimeRef.current = now;
@@ -414,7 +399,7 @@ export default function SamvahakLive({
     };
   }, [primaryRoute, alternativeRoute, hazardFraction, schedule, setPhaseBoth]);
 
-  // --- Cinematic terrain + atmosphere setup ---------------------------------
+  // Cinematic map atmosphere initialization
   const handleMapLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
@@ -427,8 +412,7 @@ export default function SamvahakLive({
         maxzoom: 14,
       });
     }
-    // Enough exaggeration to read the hill corridor's depth without tipping
-    // into a game-like relief.
+
     map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.2 });
 
     if (!map.getLayer('sky')) {
@@ -445,9 +429,6 @@ export default function SamvahakLive({
       });
     }
 
-    // Deep-space fog: dark space color, a soft blue atmospheric rim at the
-    // horizon, and a faint star field — this is what sells the "orbit" feel
-    // when the camera is pulled back.
     map.setFog({
       range: [0.5, 11],
       color: 'rgba(186, 210, 235, 0.35)',
@@ -457,7 +438,6 @@ export default function SamvahakLive({
       'star-intensity': 0.25,
     });
 
-    // Open from orbit, then glide down into the North-East corridor.
     map.jumpTo(ORBITAL_VIEW_STATE);
     schedule(() => {
       map.flyTo({ ...REGIONAL_VIEW_STATE, duration: 3600, curve: 1.3, essential: true });
@@ -472,7 +452,7 @@ export default function SamvahakLive({
     mapRef.current?.getMap()?.flyTo({ center: [lng, lat], zoom: 12.5, pitch: 60, duration: 1400, essential: true });
   }, []);
 
-  // --- Derived GeoJSON -------------------------------------------------------
+  // GeoJSON memoization
   const safeSegment = useMemo(() => toLineFeature(sliceUpToFraction(primaryRoute, hazardFraction)), [primaryRoute, hazardFraction]);
 
   const blockedSegment = useMemo(() => {
@@ -491,9 +471,6 @@ export default function SamvahakLive({
   const riskLevel = risk >= 60 ? 'HIGH' : risk >= 35 ? 'MODERATE' : 'LOW';
   const riskColor = risk >= 60 ? '#f87171' : risk >= 35 ? '#fbbf24' : '#34d399';
 
-  // --- Layer paint helpers ---------------------------------------------------
-  // Thin, elegant lines rather than heavy neon glow — an overlay that reads
-  // as "navigation intelligence" sitting on real terrain, not a highlighter.
   const glowLine = (color: string, width = 1.6): LayerProps['paint'] => ({ 'line-color': color, 'line-width': width });
   const haloLine = (color: string, width = 7): LayerProps['paint'] => ({
     'line-color': color,
@@ -548,13 +525,11 @@ export default function SamvahakLive({
       >
         {layers.routes && (
           <>
-            {/* Safe portion */}
             <Source id="safe-segment" type="geojson" data={safeSegment}>
               <MapLayer id="safe-halo" type="line" paint={haloLine('#e2e8f0', 8)} />
               <MapLayer id="safe-line" type="line" paint={glowLine('#f8fafc', 1.8)} />
             </Source>
 
-            {/* Blocked portion */}
             {showBlocked && layers.incidents && (
               <Source id="blocked-segment" type="geojson" data={blockedSegment}>
                 <MapLayer id="blocked-halo" type="line" paint={haloLine('#f87171', 8)} />
@@ -569,7 +544,6 @@ export default function SamvahakLive({
               </Source>
             )}
 
-            {/* Alternative corridor */}
             {showAlternative && (
               <Source id="alt-segment" type="geojson" data={altFeature}>
                 <MapLayer id="alt-halo" type="line" paint={haloLine('#22d3ee', 9)} />
@@ -579,7 +553,6 @@ export default function SamvahakLive({
           </>
         )}
 
-        {/* Weather — region-anchored, not a blanket layer */}
         {layers.weather &&
           DEMO_WEATHER.map((region) => (
             <Marker key={region.id} longitude={region.lng} latitude={region.lat} anchor="center">
@@ -587,7 +560,6 @@ export default function SamvahakLive({
             </Marker>
           ))}
 
-        {/* Landslide incident marker */}
         {showHazardMarker && layers.incidents && (
           <Marker longitude={hazardPoint[0]} latitude={hazardPoint[1]} anchor="center">
             <button
@@ -605,7 +577,6 @@ export default function SamvahakLive({
           </Marker>
         )}
 
-        {/* Citizen report */}
         {layers.reports && (
           <Marker longitude={DEMO_CITIZEN_REPORT.lng} latitude={DEMO_CITIZEN_REPORT.lat} anchor="center">
             <button
@@ -619,7 +590,6 @@ export default function SamvahakLive({
           </Marker>
         )}
 
-        {/* Truck / vehicle */}
         {layers.vehicles && (
           <Marker longitude={truckPos[0]} latitude={truckPos[1]} anchor="center">
             <button
@@ -639,7 +609,6 @@ export default function SamvahakLive({
         )}
       </MapGL>
 
-      {/* Live feed status overlay */}
       <GlassPanel className="pointer-events-none absolute left-6 top-6 max-w-sm p-5">
         <p className="text-xs uppercase tracking-wide text-slate-400">Samvahak Live Feed</p>
         <p className={`mt-1.5 text-base font-medium leading-snug transition-colors duration-500 ${textClassName}`}>
@@ -648,7 +617,6 @@ export default function SamvahakLive({
         <p className="mt-3 text-xs text-slate-500">Route: {originName} to {destinationName} corridor</p>
       </GlassPanel>
 
-      {/* AI route-risk explanation */}
       <GlassPanel className="absolute bottom-6 left-6 w-72 p-4">
         <div className="flex items-center justify-between">
           <p className="text-xs uppercase tracking-wide text-slate-400">Route Risk</p>
@@ -667,7 +635,6 @@ export default function SamvahakLive({
         )}
       </GlassPanel>
 
-      {/* Origin / destination */}
       <GlassPanel className="absolute bottom-6 right-6 w-64 p-4">
         <div className="space-y-2">
           <div>
@@ -708,7 +675,6 @@ export default function SamvahakLive({
         </div>
       </GlassPanel>
 
-      {/* Layer controls */}
       <GlassPanel className="absolute right-6 top-6 flex flex-col gap-1 p-1.5">
         {controlItems.map(({ key, icon: Icon, label: itemLabel }) => (
           <button
@@ -725,7 +691,6 @@ export default function SamvahakLive({
         ))}
       </GlassPanel>
 
-      {/* Weather legend */}
       <GlassPanel className="absolute bottom-6 left-1/2 -translate-x-1/2 px-3 py-2">
         <div className="flex items-center gap-3">
           {(Object.keys(WEATHER_META) as WeatherCondition[]).map((cond) => {
@@ -741,7 +706,6 @@ export default function SamvahakLive({
         </div>
       </GlassPanel>
 
-      {/* Selected marker info card */}
       {selected && (
         <GlassPanel className="absolute left-1/2 top-6 w-72 -translate-x-1/2 p-4">
           <button
