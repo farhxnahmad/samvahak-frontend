@@ -561,8 +561,10 @@ export default function SamvahakLive({
                 <MapLayer
                   id="blocked-line"
                   type="line"
-                  paint={glowLine('#ef4444', 1.8)}
-                  layout={{ 'line-dasharray': [1.5, 1] }}
+                  paint={{
+                    ...glowLine('#ef4444', 1.8),
+                    'line-dasharray': [1.5, 1],
+                  }}
                 />
               </Source>
             )}
