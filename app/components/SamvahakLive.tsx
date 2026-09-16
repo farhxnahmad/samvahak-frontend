@@ -555,7 +555,7 @@ export default function SamvahakLive({
         ref={mapRef}
         mapboxAccessToken={mapboxToken}
         initialViewState={ORBITAL_VIEW_STATE}
-        mapStyle="mapbox://styles/mapbox/satellite-v9"
+        mapStyle="mapbox://styles/mapbox/satellite-streets-v12"
         projection="globe"
         onLoad={handleMapLoad}
         style={{ width: '100%', height: '100%' }}
@@ -576,8 +576,7 @@ export default function SamvahakLive({
                 <MapLayer
                   id="blocked-line"
                   type="line"
-                  paint={glowLine('#ef4444', 1.8)}
-                  layout={{ 'line-dasharray': [1.5, 1] } as any}
+                  paint={{ ...glowLine('#ef4444', 1.8), 'line-dasharray': [1.5, 1] }}
                 />
               </Source>
             )}
