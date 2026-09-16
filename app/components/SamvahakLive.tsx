@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import MapGL, { Source, Layer as MapLayer, Marker, type MapRef, type LayerProps } from 'react-map-gl/mapbox';
+import MapGL, { Source, Layer as MapLayer, Marker, type MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   CloudRain,
@@ -502,8 +502,14 @@ export default function SamvahakLive({
   // --- Layer paint helpers ---------------------------------------------------
   // Thin, elegant lines rather than heavy neon glow — an overlay that reads
   // as "navigation intelligence" sitting on real terrain, not a highlighter.
-  const glowLine = (color: string, width = 1.6): LayerProps['paint'] => ({ 'line-color': color, 'line-width': width });
-  const haloLine = (color: string, width = 7): LayerProps['paint'] => ({
+  // Typed as `any` deliberately: `LayerProps['paint']` resolves to a union
+  // across every Mapbox layer type (background, fill, line, ...), and a
+  // plain object literal can't satisfy that union without being narrowed
+  // per-call-site. `next build`'s stricter type-checking (unlike `next dev`)
+  // fails on that mismatch, so we widen the return type here instead of
+  // repeating a cast at every call site below.
+  const glowLine = (color: string, width = 1.6): any => ({ 'line-color': color, 'line-width': width });
+  const haloLine = (color: string, width = 7): any => ({
     'line-color': color,
     'line-width': width,
     'line-blur': 5,
@@ -571,7 +577,7 @@ export default function SamvahakLive({
                   id="blocked-line"
                   type="line"
                   paint={glowLine('#ef4444', 1.8)}
-                  layout={{ 'line-dasharray': [1.5, 1] }}
+                  layout={{ 'line-dasharray': [1.5, 1] } as any}
                 />
               </Source>
             )}
